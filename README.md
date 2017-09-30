@@ -96,9 +96,18 @@ sys	0m0.902s
 MD5 (/tmp/docker.rpm) = 647b4bb14e61bec73ddd137f6a40edac
 ```
 
-![Progress](https://github.com/thimoonxy/go-pcurl/blob/master/misc/img1.png)
+### iftop outputs when running wget (in 1 connection)
+
 ![Progress](https://github.com/thimoonxy/go-pcurl/blob/master/misc/img2.png)
+
+### iftop outputs when running pcurl (in 4 connections)
+
+![Progress](https://github.com/thimoonxy/go-pcurl/blob/master/misc/img1.png)
+
+### iftop outputs when running pcurl (in more connections)
+
 ![Progress](https://github.com/thimoonxy/go-pcurl/blob/master/misc/img3.png)
+
 ![Progress](https://github.com/thimoonxy/go-pcurl/blob/master/misc/img4.png)
 
 
