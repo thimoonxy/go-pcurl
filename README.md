@@ -118,4 +118,4 @@ MD5 (/tmp/docker.rpm) = 647b4bb14e61bec73ddd137f6a40edac
 - [ ] More human readable outputs instead of ugly log.print things;
 - [ ] Processing bar;
 - [ ] Detect and select faster ip to use, if resource can be resolved to several IPs records;
-- [ ] Local optimization, decreasing the cost of native Mem/disk IO and so forth; 
+- [x] Local optimization, decreasing the cost of native Mem/disk IO and so forth; 
