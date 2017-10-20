@@ -7,9 +7,15 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/vbauerster/mpb"
+	"github.com/vbauerster/mpb/decor"
 )
 
 func ckerr(err error) {
@@ -86,6 +92,19 @@ type subtask struct {
 	tmpcreated bool
 }
 
+/* 	Byte Ranges
+Reference to https://tools.ietf.org/html/rfc7233#section-2.1
+The first-byte-pos value in a byte-range-spec gives the byte-offset
+of the first byte in a range.  The last-byte-pos value gives the
+byte-offset of the last byte in the range; that is, the byte
+positions specified are inclusive.  Byte offsets start at zero.
+
+Examples of byte-ranges-specifier values:
+
+o  The first 500 bytes (byte offsets 0-499, inclusive):
+		bytes=0-499
+o  The second 500 bytes (byte offsets 500-999, inclusive):
+		bytes=500-999 */
 func (task *subtask) init(originlength, count int64, url, tmpdirname string) {
 	task.url = url
 	task.tmpcreated = false
@@ -107,14 +126,33 @@ func (task *subtask) init(originlength, count int64, url, tmpdirname string) {
 	task.tmpfname = tmp.Name()
 }
 
-func (task *subtask) get() {
+func (task *subtask) get(p *mpb.Progress) {
+	// the bar
+	barsize := task.length
+	barname := filepath.Base(task.tmpfname)
+	barname = "tmp" + strings.Split(barname, ".")[0]
+	// create bar with appropriate decorators
+	bar := p.AddBar(barsize,
+		mpb.PrependDecorators(
+			decor.StaticName(barname, 0, 0),
+			decor.Counters(": %3s / %3s", decor.Unit_KiB, 18, 0),
+		),
+		mpb.AppendDecorators(decor.ETA(5, decor.DwidthSync)),
+	)
 	res := getres(task.url, task.rgstart, task.rgend)
-	outputs, err := ioutil.ReadAll(res.Body)
+	// read from proxy reader
+	reader := bar.ProxyReader(res.Body)
+	outputs, err := ioutil.ReadAll(reader)
 	// ckerr(err)
+	// remove bar when it's done
+	p.RemoveBar(bar)
+
+	// write to tmp file
 	err = ioutil.WriteFile(task.tmpfname, outputs, 0600)
 	ckerr(err)
 	task.tmpcreated = true
-	res.Body.Close()
+
+	defer res.Body.Close()
 }
 
 func reassemble(tasks []subtask, dst string) (done bool) {
@@ -174,6 +212,25 @@ func precount(originlength, bufsize int64) (onetime, tmpfcount int) {
 	}
 	return
 }
+
+type barSlice []*mpb.Bar
+
+func (bs barSlice) Len() int { return len(bs) }
+
+func (bs barSlice) Less(i, j int) bool {
+	ip := decor.CalcPercentage(bs[i].Total(), bs[i].Current(), 100)
+	jp := decor.CalcPercentage(bs[j].Total(), bs[j].Current(), 100)
+	return ip < jp
+}
+
+func (bs barSlice) Swap(i, j int) { bs[i], bs[j] = bs[j], bs[i] }
+
+func sortByProgressFunc() mpb.BeforeRender {
+	return func(bars []*mpb.Bar) {
+		sort.Sort(sort.Reverse(barSlice(bars)))
+	}
+}
+
 func main() {
 	// Constants
 	tmpbase := "/tmp/"
@@ -206,6 +263,20 @@ func main() {
 	log.Printf("Created tmpdir: %s", tmpdirname)
 	defer destroyTMPdir(tmpdirname, tmpprefix) // cleanning up after process
 
+	// bar
+	p := mpb.New(
+		// override default (80) width
+		mpb.WithWidth(100),
+		// override default "[=>-]" format
+		mpb.WithFormat("╢▌▌░╟"),
+		// override default 100ms refresh rate
+		mpb.WithRefreshRate(120*time.Millisecond),
+		// sorting result
+		mpb.WithBeforeRenderFunc(sortByProgressFunc()),
+		// override default Stdout
+		// mpb.Output(os.Stdout),
+	)
+	defer p.Stop()
 	// Multi-processing
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	for i := 0; i < int(count); i++ {
@@ -213,11 +284,11 @@ func main() {
 			tasks[i].seq = int64(i)
 			tasks[i].init(originlength, int64(count), url, tmpdirname)
 			tmpcreatedstat <- tasks[i].tmpcreated // write to ch before tasks[i].get() starts to 'buffer' the routines
-			log.Printf("Started getting tmpfile: %s", tasks[i].tmpfname)
-			tasks[i].get()
+			// log.Printf("Started getting tmpfile: %s", tasks[i].tmpfname)
+			tasks[i].get(p)
 			// fmt.Printf("seq: %v , start: %v, end: %v, lenght: %v, islast: %t \n", tasks[i].seq, tasks[i].rgstart, tasks[i].rgend, tasks[i].length, tasks[i].islast)
 			if tasks[i].tmpcreated {
-				log.Printf("Got tmpfile: %s", tasks[i].tmpfname)
+				// log.Printf("Got tmpfile: %s", tasks[i].tmpfname)
 			}
 			lock <- true
 		}(i, tmpcreatedstat)

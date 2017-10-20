@@ -3,6 +3,14 @@ cURL in parallel way, Written in golang
 
 ## Testing Sample, compared w/ traditional wget way
 
+*Downloading resource from nginx runs locally*
+
+![Progress](https://github.com/thimoonxy/go-pcurl/blob/master/misc/bar1.gif)
+
+*Downloading resource from website*
+
+![Progress](https://github.com/thimoonxy/go-pcurl/blob/master/misc/bar2.gif)
+
 ### Common wget way took 6m21s+, used only 1 connection
 
 ```
@@ -115,7 +123,7 @@ MD5 (/tmp/docker.rpm) = 647b4bb14e61bec73ddd137f6a40edac
 
 - [ ] Need more Parameter flags instead of $@ ;
 - [ ] BW controling in each connection;
-- [ ] More human readable outputs instead of ugly log.print things;
-- [ ] Processing bar;
+- [x] More human readable outputs instead of ugly log.print things;
+- [x] Processing bar;
 - [ ] Detect and select faster ip to use, if resource can be resolved to several IPs records;
 - [x] Local optimization, decreasing the cost of native Mem/disk IO and so forth; 
