@@ -18,23 +18,19 @@ import (
 	"github.com/vbauerster/mpb/decor"
 )
 
+var Clientvar *http.Client
+
 func ckerr(err error) {
 	if err != nil {
 		log.Fatal(err.Error())
 	}
 }
 
-func getres(url string, rgstart, rgend int64) (res *http.Response) {
+func getres(client *http.Client, url string, rgstart, rgend int64) (res *http.Response) {
 
 	// Init Request
-	tr := &http.Transport{
-		DisableCompression: true, // client will compress it by default
-	}
-	client := &http.Client{Transport: tr}
 	req, err := http.NewRequest("GET", url, nil)
 	ckerr(err)
-	// dump, _ := httputil.DumpRequest(req, true)
-	// fmt.Printf("Request:\n%s\n", string(dump))
 
 	// Headers
 	req.Proto = "HTTP/1.1"
@@ -43,10 +39,6 @@ func getres(url string, rgstart, rgend int64) (res *http.Response) {
 	req.Header.Add("User-Agent",
 		"Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36")
 	req.Header.Del("Accept-Encoding")
-	//	req.Header.Add("Accept",
-	//		"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
-	//	req.Header.Add("Accept-Encoding",
-	//	"gzip, deflate, sdch, br")
 
 	// Range
 	if rgstart >= 0 && rgend > 0 {
@@ -126,7 +118,7 @@ func (task *subtask) init(originlength, count int64, url, tmpdirname string) {
 	task.tmpfname = tmp.Name()
 }
 
-func (task *subtask) get(p *mpb.Progress) {
+func (task *subtask) get(client *http.Client, p *mpb.Progress) {
 	// the bar
 	barsize := task.length
 	barname := filepath.Base(task.tmpfname)
@@ -139,20 +131,23 @@ func (task *subtask) get(p *mpb.Progress) {
 		),
 		mpb.AppendDecorators(decor.ETA(5, decor.DwidthSync)),
 	)
-	res := getres(task.url, task.rgstart, task.rgend)
+	res := getres(client, task.url, task.rgstart, task.rgend)
+
 	// read from proxy reader
 	reader := bar.ProxyReader(res.Body)
 	outputs, err := ioutil.ReadAll(reader)
 	// ckerr(err)
-	// remove bar when it's done
-	p.RemoveBar(bar)
 
 	// write to tmp file
 	err = ioutil.WriteFile(task.tmpfname, outputs, 0600)
 	ckerr(err)
 	task.tmpcreated = true
 
-	defer res.Body.Close()
+	// remove bar when it's done
+	p.RemoveBar(bar)
+
+	// io.Copy(ioutil.Discard, res.Body)
+	res.Body.Close()
 }
 
 func reassemble(tasks []subtask, dst string) (done bool) {
@@ -233,9 +228,15 @@ func sortByProgressFunc() mpb.BeforeRender {
 
 func main() {
 	// Constants
-	tmpbase := "/tmp/"
+	tmpbase := "/tmp"
+	f, _ := os.Stat(tmpbase)
+	if !f.IsDir() {
+		tmpbase = os.TempDir()
+	}
 	tmpprefix := "gotemp"
 	bufsize := int64(10 << 20) // 10MB
+	MaxIdleConnections := 20
+	RequestTimeout := 0 // no timeout
 
 	// Preparing args
 	if len(os.Args) != 3 {
@@ -246,11 +247,18 @@ func main() {
 	dst := os.Args[2] // destination fpath, where file stores
 
 	// Preparing  Vars
-	var b2sn int               // init n=0, used for b2s()
-	var count int              // tmp file count
-	var onetime int            // how many goroutines run at a time
-	lock := make(chan bool)    // main-routine waits till goroutines finish
-	res := getres(url, -1, -1) // -1 indicates no range specified
+	var b2sn int            // init n=0, used for b2s()
+	var count int           // tmp file count
+	var onetime int         // how many goroutines run at a time
+	lock := make(chan bool) // main-routine waits till goroutines finish
+	Clientvar = &http.Client{
+		Transport: &http.Transport{
+			MaxIdleConnsPerHost: MaxIdleConnections,
+			DisableCompression:  true, // client will compress it by default
+		},
+		Timeout: time.Duration(RequestTimeout) * time.Second,
+	}
+	res := getres(Clientvar, url, -1, -1) // -1 indicates no range specified
 	originlength := res.ContentLength
 	onetime, count = precount(originlength, bufsize)
 	tmpcreatedstat := make(chan bool, onetime) // ch with buff, to control batch scale
@@ -285,7 +293,7 @@ func main() {
 			tasks[i].init(originlength, int64(count), url, tmpdirname)
 			tmpcreatedstat <- tasks[i].tmpcreated // write to ch before tasks[i].get() starts to 'buffer' the routines
 			// log.Printf("Started getting tmpfile: %s", tasks[i].tmpfname)
-			tasks[i].get(p)
+			tasks[i].get(Clientvar, p)
 			// fmt.Printf("seq: %v , start: %v, end: %v, lenght: %v, islast: %t \n", tasks[i].seq, tasks[i].rgstart, tasks[i].rgend, tasks[i].length, tasks[i].islast)
 			if tasks[i].tmpcreated {
 				// log.Printf("Got tmpfile: %s", tasks[i].tmpfname)
@@ -296,8 +304,8 @@ func main() {
 
 	// Sticking goroutines onto main
 	for i := 0; i < int(count); i++ {
-		<-tmpcreatedstat
 		<-lock
+		<-tmpcreatedstat
 	}
 
 	// Outputting
