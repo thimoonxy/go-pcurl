@@ -192,6 +192,24 @@ func precount(originlength, bufsize int64) (onetime, tmpfcount int) {
 	return
 }
 
+func acceptRange(res *http.Response, dst string) {
+	accept := res.Header.Get("Accept-Ranges")
+	if strings.TrimSpace(accept) == "" {
+		log.Println("Range not accepted, downloading directly ...")
+		f, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		defer f.Close()
+		ckerr(err)
+		r := bufio.NewReader(res.Body)
+		n, err := r.WriteTo(f)
+		ckerr(err)
+		if res.ContentLength != n {
+			log.Fatal(fmt.Sprintf("ContentLength %d != file size %d", res.ContentLength, n))
+		}
+		log.Println("Finshied:", dst)
+		os.Exit(0)
+	}
+}
+
 func main() {
 	// Constants
 	tmpbase := "/tmp"
@@ -237,6 +255,7 @@ func main() {
 		Timeout: time.Duration(RequestTimeout) * time.Second,
 	}
 	res := getres(Clientvar, url, -1, -1) // -1 indicates no range specified
+	acceptRange(res, dst)
 	originlength := res.ContentLength
 	onetime, count = precount(originlength, bufsize)
 	tmpcreatedstat := make(chan bool, onetime) // ch with buff, to control batch scale
