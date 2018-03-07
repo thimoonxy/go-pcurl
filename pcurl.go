@@ -7,15 +7,10 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/vbauerster/mpb"
-	"github.com/vbauerster/mpb/decor"
 )
 
 var Clientvar *http.Client
@@ -118,33 +113,20 @@ func (task *subtask) init(originlength, count int64, url, tmpdirname string) {
 	task.tmpfname = tmp.Name()
 }
 
-func (task *subtask) get(client *http.Client, p *mpb.Progress) {
-	// the bar
-	barsize := task.length
-	barname := filepath.Base(task.tmpfname)
-	barname = "tmp" + strings.Split(barname, ".")[0]
+func (task *subtask) get(client *http.Client) {
 	// create bar with appropriate decorators
-	bar := p.AddBar(barsize,
-		mpb.PrependDecorators(
-			decor.StaticName(barname, 0, 0),
-			decor.Counters(": %3s / %3s", decor.Unit_KiB, 18, 0),
-		),
-		mpb.AppendDecorators(decor.ETA(5, decor.DwidthSync)),
-	)
+
 	res := getres(client, task.url, task.rgstart, task.rgend)
 
 	// read from proxy reader
-	reader := bar.ProxyReader(res.Body)
-	outputs, err := ioutil.ReadAll(reader)
+
+	outputs, err := ioutil.ReadAll(res.Body)
 	// ckerr(err)
 
 	// write to tmp file
 	err = ioutil.WriteFile(task.tmpfname, outputs, 0600)
 	ckerr(err)
 	task.tmpcreated = true
-
-	// remove bar when it's done
-	p.RemoveBar(bar)
 
 	// io.Copy(ioutil.Discard, res.Body)
 	res.Body.Close()
@@ -198,6 +180,8 @@ func precount(originlength, bufsize int64) (onetime, tmpfcount int) {
 		tmpfcount = int(originlength / bufsize)
 		if tmpfcount >= 400 { // in case too many openfiles
 			tmpfcount = 200
+		} else if tmpfcount <= 4 {
+			tmpfcount = 4
 		}
 		log.Printf("TmpFile amount: %d", tmpfcount)
 		onetime = 4
@@ -206,24 +190,6 @@ func precount(originlength, bufsize int64) (onetime, tmpfcount int) {
 		onetime = tmpfcount
 	}
 	return
-}
-
-type barSlice []*mpb.Bar
-
-func (bs barSlice) Len() int { return len(bs) }
-
-func (bs barSlice) Less(i, j int) bool {
-	ip := decor.CalcPercentage(bs[i].Total(), bs[i].Current(), 100)
-	jp := decor.CalcPercentage(bs[j].Total(), bs[j].Current(), 100)
-	return ip < jp
-}
-
-func (bs barSlice) Swap(i, j int) { bs[i], bs[j] = bs[j], bs[i] }
-
-func sortByProgressFunc() mpb.BeforeRender {
-	return func(bars []*mpb.Bar) {
-		sort.Sort(sort.Reverse(barSlice(bars)))
-	}
 }
 
 func main() {
@@ -245,6 +211,18 @@ func main() {
 	}
 	url := os.Args[1] // url = "http://127.0.0.1:8080/centos.iso" // tmp testing
 	dst := os.Args[2] // destination fpath, where file stores
+	_, err := os.Stat(dst)
+	if err == nil {
+		fmt.Printf("%s found, Override?: [y/n]", dst)
+		var decide string
+		fmt.Scan(&decide)
+		decide = strings.ToLower(decide)
+		if strings.TrimSpace(decide) == "y" {
+			os.Remove(dst)
+		} else {
+			log.Fatalf("Expected [y/n], but got %v", decide)
+		}
+	}
 
 	// Preparing  Vars
 	var b2sn int            // init n=0, used for b2s()
@@ -271,20 +249,6 @@ func main() {
 	log.Printf("Created tmpdir: %s", tmpdirname)
 	defer destroyTMPdir(tmpdirname, tmpprefix) // cleanning up after process
 
-	// bar
-	p := mpb.New(
-		// override default (80) width
-		mpb.WithWidth(100),
-		// override default "[=>-]" format
-		mpb.WithFormat("╢▌▌░╟"),
-		// override default 100ms refresh rate
-		mpb.WithRefreshRate(120*time.Millisecond),
-		// sorting result
-		mpb.WithBeforeRenderFunc(sortByProgressFunc()),
-		// override default Stdout
-		// mpb.Output(os.Stdout),
-	)
-	defer p.Stop()
 	// Multi-processing
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	for i := 0; i < int(count); i++ {
@@ -293,7 +257,7 @@ func main() {
 			tasks[i].init(originlength, int64(count), url, tmpdirname)
 			tmpcreatedstat <- tasks[i].tmpcreated // write to ch before tasks[i].get() starts to 'buffer' the routines
 			// log.Printf("Started getting tmpfile: %s", tasks[i].tmpfname)
-			tasks[i].get(Clientvar, p)
+			tasks[i].get(Clientvar)
 			// fmt.Printf("seq: %v , start: %v, end: %v, lenght: %v, islast: %t \n", tasks[i].seq, tasks[i].rgstart, tasks[i].rgend, tasks[i].length, tasks[i].islast)
 			if tasks[i].tmpcreated {
 				// log.Printf("Got tmpfile: %s", tasks[i].tmpfname)
